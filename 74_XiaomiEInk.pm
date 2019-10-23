@@ -9,6 +9,7 @@
 # changes:
 # 2019-10-19 initial alpha, privat testing
 # 2019-10-20 reorder code
+# 2019-10-23 add function "get device battery"
 #
 
 package main;
@@ -127,7 +128,7 @@ sub Get($$@) {
 
     Log3 $name, 5, "XiaomiEInk name -> $name, cmd -> $cmd, mac -> $mac";
 
-    if ($cmd eq 'sensorData' or $cmd eq 'model' or $cmd eq 'clock' or $cmd eq 'firmware' or $cmd eq 'manufactury') {
+    if ($cmd eq 'sensorData' or $cmd eq 'model' or $cmd eq 'clock' or $cmd eq 'firmware' or $cmd eq 'manufactury' or $cmd eq 'battery') {
         return "usage: clock" if ( @args != 0 );
         Log3 $name, 4,"Get Mac -> $mac, Name -> $name, Cmd -> $cmd";
         myUtils_LYWSD02_main($mac,$name,$cmd);
@@ -140,7 +141,7 @@ sub Get($$@) {
     else 
     {   my $list = "";
         # List for the get commands
-        $list .= "sensorData:noArg model:noArg clock:noArg firmware:noArg manufactury:noArg";
+        $list .= "sensorData:noArg model:noArg clock:noArg firmware:noArg manufactury:noArg battery:noArg";
         return "Unknown argument $cmd, choose one of $list";
     }
 
@@ -284,10 +285,11 @@ sub myUtils_LYWSD02_main($$$)
     readingsSingleUpdate( $hash, "job", "read clock", 1 ) if ($cmd eq 'clock');
     readingsSingleUpdate( $hash, "job", "read firmware", 1 ) if ($cmd eq 'firmware');
     readingsSingleUpdate( $hash, "job", "read manufactury", 1 ) if ($cmd eq 'manufactury');
+	readingsSingleUpdate( $hash, "job", "read battery", 1 ) if ($cmd eq 'battery');
   
     # Set Parameter to execute statement
     $arg = 'scan on,scan off,quit' if($cmd eq 'sensorData');
-    $arg = 'a,quit' if($cmd eq 'clock' or $cmd eq 'firmware' or $cmd eq 'manufactury' or $cmd eq 'model');
+    $arg = 'a,quit' if($cmd eq 'clock' or $cmd eq 'firmware' or $cmd eq 'manufactury' or $cmd eq 'model' or $cmd eq 'battery');
   
     # NonBlocking Call to run Subroutine
     $hash->{helper}{RUNNING_PID} = BlockingCall(
@@ -339,6 +341,9 @@ sub BluetoothCommands($)
     elsif ($cmd eq 'manufactury') {
         open2 ( $in_fid, $out_fid, "gatttool -b $mac --char-read -a 0x0c".' 2>&1' );
     }
+    elsif ($cmd eq 'battery') {
+        open2 ( $in_fid, $out_fid, "gatttool -b $mac --char-read -a 0x52".' 2>&1' );
+    }
     my $x_select = IO::Select->new ( [$in_fid] );
     my $x_controller = '';
     my $prec_command = '';
@@ -352,6 +357,7 @@ sub BluetoothCommands($)
     my $clock = '';
     my $firmware = '';
     my $manufactury = '';
+    my $battery = '';
     my $temp_zaehler = 0;
     my $humi_zaehler = 0;
     my @ARGV = split(',',$arg);
@@ -395,7 +401,7 @@ sub BluetoothCommands($)
                        if(length($mon) < 2){ $mon="0".$mon; }
                        $clock = $mday .'.' .$mon .'.' .$year .'-' .$hour .':' .$min .':' .$sec;
                        Log3 $name, 4, "x_Buffer -> $x_buffer, cmd -> $cmd, launch_flag -> $launch_flag, hex -> $hex, time -> $time, clock -> $clock";
-                       return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury";
+                       return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
                     }
                        Log3 $name, 4, "Buffer-Last? x_Buffer -> $x_buffer, cmd -> $cmd, launch_flag -> $launch_flag";
                        last;
@@ -406,7 +412,7 @@ sub BluetoothCommands($)
                       $hex = substr($x_buffer,$pos+12);
                       $hex =~ s/\s+//g;
                       $firmware = pack('H*',$hex);
-                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury";
+                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
                    }
                 }
                 if ($x_buffer =~ /@/ and $cmd eq 'manufactury') {
@@ -415,7 +421,7 @@ sub BluetoothCommands($)
                       $hex = substr($x_buffer,$pos+12);
                       $hex =~ s/\s+//g;
                       $manufactury = pack('H*',$hex);
-                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury";
+                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
                    }
                 }
                 if ($x_buffer =~ /@/ and $cmd eq 'model') {
@@ -424,7 +430,16 @@ sub BluetoothCommands($)
                       $hex = substr($x_buffer,$pos+12);
                       $hex =~ s/\s+//g;
                       $model = pack('H*',$hex);
-                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury";
+                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
+                   }
+                }
+                if ($x_buffer =~ /@/ and $cmd eq 'battery') {
+                   my $pos = index($x_buffer,'descriptor:');
+                   if ($pos != -1) {
+                      $hex = substr($x_buffer,$pos+12);
+                      $hex =~ s/\s+//g;
+                      $battery = hex($hex);
+                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
                    }
                 }
             } until ( $x_buffer =~ /^%*[^\[].*#\s+/ );
@@ -470,17 +485,17 @@ sub BluetoothCommands($)
                     $hex = substr($x_buffer,$pos+2,2) .$hex;
                     $humidity = hex($hex)/10;
                     if ($humi_zaehler == 0)
-                    {   return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury";
+                    {   return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
                     }
                     $humi_zaehler +=1;
                 }
                 if($humi_zaehler > 3 or $temp_zaehler > 3)
                 {   Log3 $name, 4, "XiaomiEInk Abbruch, humi_zaehler -> $humi_zaehler --- temp_zaehler -> $temp_zaehler";
-                    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury";
+                    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
                 }
                 if($humi_zaehler >= 1 and $temp_zaehler >= 1)
                 {   Log3 $name, 4, "XiaomiEInk Ende, alles gefunden! Name->$name|Mac->$mac|Arg->$arg|Temperatur->$temperatur|Humidity->$humidity";
-                    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury";
+                    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
                 }
             }
             if ( $x_buffer =~ /Controller\s+(\S+)/ ) 
@@ -510,13 +525,13 @@ sub BluetoothCommands($)
     }
     close ( $in_fid );
     close ( $out_fid );
-    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury";
+    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
 }
 
 sub BluetoothCommands_Done($) {
 
     my $string = shift;
-    my ($name, $mac, $arg, $temperatur, $humidity, $model, $clock, $firmware, $manufactury) = split( "\\|", $string );
+    my ($name, $mac, $arg, $temperatur, $humidity, $model, $clock, $firmware, $manufactury, $battery) = split( "\\|", $string );
     my $hash = $defs{$name};
 
     readingsSingleUpdate($hash, "temperature", $temperatur, 1) if ($temperatur != 0);
@@ -529,6 +544,9 @@ sub BluetoothCommands_Done($) {
     readingsSingleUpdate($hash, "clock", $clock, 1) if ($clock ne '');
     readingsSingleUpdate($hash, "firmware", $firmware, 1) if ($firmware ne '');
     readingsSingleUpdate($hash, "manufactury", $manufactury, 1) if ($manufactury ne '');
+    readingsSingleUpdate($hash, "batteryPercent", $battery, 1) if ($battery ne '');
+    readingsSingleUpdate($hash, "battery", "ok", 1) if ($battery ne '' and $battery > 15);
+    readingsSingleUpdate($hash, "battery", "low", 1) if ($battery ne '' and $battery <= 15);
     readingsSingleUpdate($hash, "job", "done", 1);
     delete( $hash->{helper}{RUNNING_PID} );
 
@@ -768,7 +786,7 @@ sub stateRequest1($)
   ],
   "release_status": "unstable",
   "license": "GPL_2",
-  "version": "v0.0.3",
+  "version": "v0.0.4",
   "author": [
     "Mathias Passow <mathias.passow@me.com>"
   ],
