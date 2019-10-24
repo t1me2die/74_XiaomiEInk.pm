@@ -4,12 +4,15 @@
 # 2019-10-19 12:00:00 
 # Mathias Passow -> Contact -> mathias.passow@me.com
 #
-# version 0.0.2
+# version 0.0.5
 #
 # changes:
 # 2019-10-19 initial alpha, privat testing
 # 2019-10-20 reorder code
 # 2019-10-23 add function "get device battery"
+# 2019-10-24 add 24h function for "get device battery"
+# 2019-10-24 update for bluez 5.51 - super alpha testing
+# TO-DO: have to code -> getBlueZVersion 
 #
 
 package main;
@@ -71,11 +74,20 @@ GP_Export(
       )
 );
 
+my %CallBatteryAge = (
+    '8h'  => 28800,
+    '16h' => 57600,
+    '24h' => 86400,
+    '32h' => 115200,
+    '40h' => 144000,
+    '48h' => 172800
+);
+
 sub Initialize($) {
 
     my ($hash) = @_;
 
-    #$hash->{SetFn}   = "FHEM::XiaomiEInk::Set";
+    $hash->{SetFn}    = "FHEM::XiaomiEInk::Set";
     $hash->{GetFn}    = "FHEM::XiaomiEInk::Get";
     $hash->{DefFn}    = "FHEM::XiaomiEInk::Define";
     $hash->{NotifyFn} = "FHEM::XiaomiEInk::Notify";
@@ -128,11 +140,18 @@ sub Get($$@) {
 
     Log3 $name, 5, "XiaomiEInk name -> $name, cmd -> $cmd, mac -> $mac";
 
-    if ($cmd eq 'sensorData' or $cmd eq 'model' or $cmd eq 'clock' or $cmd eq 'firmware' or $cmd eq 'manufactury' or $cmd eq 'battery') {
+    if ($cmd eq 'sensorData' or $cmd eq 'model' or $cmd eq 'clock' or $cmd eq 'firmware' or $cmd eq 'manufactury') {
         return "usage: clock" if ( @args != 0 );
         Log3 $name, 4,"Get Mac -> $mac, Name -> $name, Cmd -> $cmd";
         myUtils_LYWSD02_main($mac,$name,$cmd);
         #stateRequest1($hash);
+    }
+    elsif($cmd eq 'battery' and (CallBattery_IsUpdateTimeAgeToOld($hash,$CallBatteryAge{ AttrVal( $name, 'BatteryFirmwareAge','24h' ) } ) ) )
+    {   myUtils_LYWSD02_main($mac,$name,$cmd);
+        CallBattery_Timestamp($hash);
+    }
+    elsif($cmd eq 'battery' and (!CallBattery_IsUpdateTimeAgeToOld($hash,$CallBatteryAge{ AttrVal( $name, 'BatteryFirmwareAge','24h' ) } ) ) )
+    {   return "First you have to resetBatteryTimestamp, because your last batterycall is less then " .$CallBatteryAge{ AttrVal( $name, 'BatteryFirmwareAge','24h' ) } ." seconds in the past";
     }
     elsif ( $cmd eq 'devicename' ) {
         return "usage: devicename" if ( @args != 0 );
@@ -153,10 +172,18 @@ sub Set($$@) {
     my ( $hash, $name, @aa ) = @_;
     my ( $cmd, @args ) = @aa;
 
-    my $list = "";
-    #$list .= "resetBatteryTimestamp:noArg";
 
-    return "Unknown argument $cmd, choose one of $list";
+    if ( $cmd eq 'resetBatteryTimestamp' ) 
+    {   return "usage: resetBatteryTimestamp" if ( @args != 0 );
+        $hash->{helper}{updateTimeCallBattery} = 0;
+        return;
+    }
+    else 
+    {   my $list = "";
+        $list .= "resetBatteryTimestamp:noArg";
+        return "Unknown argument $cmd, choose one of $list";
+    }
+
     return undef;
 }
 
@@ -285,7 +312,7 @@ sub myUtils_LYWSD02_main($$$)
     readingsSingleUpdate( $hash, "job", "read clock", 1 ) if ($cmd eq 'clock');
     readingsSingleUpdate( $hash, "job", "read firmware", 1 ) if ($cmd eq 'firmware');
     readingsSingleUpdate( $hash, "job", "read manufactury", 1 ) if ($cmd eq 'manufactury');
-	readingsSingleUpdate( $hash, "job", "read battery", 1 ) if ($cmd eq 'battery');
+    readingsSingleUpdate( $hash, "job", "read battery", 1 ) if ($cmd eq 'battery');
   
     # Set Parameter to execute statement
     $arg = 'scan on,scan off,quit' if($cmd eq 'sensorData');
@@ -300,6 +327,7 @@ sub myUtils_LYWSD02_main($$$)
         "FHEM::XiaomiEInk::BluetoothCommands_Aborted",
         $hash
     ) unless ( exists( $hash->{helper}{RUNNING_PID} ));
+    Log3 $name, 5, "Sub myUtils_LYWSD02_main ($name) - hash -> $hash, cmd -> $cmd";
 }
 
 
@@ -360,6 +388,10 @@ sub BluetoothCommands($)
     my $battery = '';
     my $temp_zaehler = 0;
     my $humi_zaehler = 0;
+	my $flg = 0;
+	my $save_lastBuffer = 0;
+	my $flg_humi = 0;
+	my $firstCatch = 0;
     my @ARGV = split(',',$arg);
     my $hash = $defs{$name};
 
@@ -401,7 +433,7 @@ sub BluetoothCommands($)
                        if(length($mon) < 2){ $mon="0".$mon; }
                        $clock = $mday .'.' .$mon .'.' .$year .'-' .$hour .':' .$min .':' .$sec;
                        Log3 $name, 4, "x_Buffer -> $x_buffer, cmd -> $cmd, launch_flag -> $launch_flag, hex -> $hex, time -> $time, clock -> $clock";
-                       return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
+                       return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
                     }
                        Log3 $name, 4, "Buffer-Last? x_Buffer -> $x_buffer, cmd -> $cmd, launch_flag -> $launch_flag";
                        last;
@@ -412,7 +444,7 @@ sub BluetoothCommands($)
                       $hex = substr($x_buffer,$pos+12);
                       $hex =~ s/\s+//g;
                       $firmware = pack('H*',$hex);
-                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
+                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
                    }
                 }
                 if ($x_buffer =~ /@/ and $cmd eq 'manufactury') {
@@ -421,7 +453,7 @@ sub BluetoothCommands($)
                       $hex = substr($x_buffer,$pos+12);
                       $hex =~ s/\s+//g;
                       $manufactury = pack('H*',$hex);
-                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
+                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
                    }
                 }
                 if ($x_buffer =~ /@/ and $cmd eq 'model') {
@@ -430,16 +462,19 @@ sub BluetoothCommands($)
                       $hex = substr($x_buffer,$pos+12);
                       $hex =~ s/\s+//g;
                       $model = pack('H*',$hex);
-                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
+                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
                    }
                 }
                 if ($x_buffer =~ /@/ and $cmd eq 'battery') {
                    my $pos = index($x_buffer,'descriptor:');
                    if ($pos != -1) {
-                      $hex = substr($x_buffer,$pos+12);
+                      $hex = substr($x_buffer,$pos+12,2);
                       $hex =~ s/\s+//g;
                       $battery = hex($hex);
-                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
+                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
+                   }
+                   elsif($pos == -1)
+                   {   return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|error";
                    }
                 }
             } until ( $x_buffer =~ /^%*[^\[].*#\s+/ );
@@ -451,16 +486,42 @@ sub BluetoothCommands($)
             $x_buffer =~ /^%*(.*)@\[bluetooth/;
             unless ( $x_buffer =~ /^\s*$/ ) 
             {   #print "\n<- Angekommen hier...     $1\n";
-                if ($x_buffer =~ /$mac/ and $x_buffer =~ /Key/)
+                if ($flg == 1)
+				{	if (substr($x_buffer, 65, 1) eq '4')
+					{	$hex = substr($x_buffer,73,2);
+						$temperatur = hex($hex)/10;
+						$temp_zaehler += 1;
+						$flg = 0;
+					}
+					elsif (substr($x_buffer, 65, 1) eq '6')
+					{	$hex = substr($x_buffer,73,2);
+						$flg_humi = 1;
+					}
+					elsif ($flg_humi == 1)
+					{	$hex = substr($x_buffer,28,2) .$hex;
+						$humidity = hex($hex)/10;
+						$humi_zaehler += 1;
+						$flg = 0;
+						$flg_humi = 0;
+					}
+				}
+				
+				if ($x_buffer =~ /$mac/ and $x_buffer =~ /Key/)
                 {   $i = 1;
                 }
-                elsif ($x_buffer =~ /$mac/ and $x_buffer =~ /Value/ and $x_buffer !~ /Characteristic/)
+                elsif ($x_buffer =~ /$mac/ and $x_buffer =~ /Value/ and $x_buffer !~ /Characteristic/ and $flg_humi == 0)
                 {   $i+=1;
+                    $flg = 1;
+                }
+                elsif ($flg_humi == 1)
+                {   $flg = 1;
                 }
                 else
                 {   $i=0;
                     $art = '';
                     $hex = '';
+                    $flg = 0;
+                    $flg_humi = 0;
                 }
                 
                 if ($i == 14)
@@ -485,17 +546,17 @@ sub BluetoothCommands($)
                     $hex = substr($x_buffer,$pos+2,2) .$hex;
                     $humidity = hex($hex)/10;
                     if ($humi_zaehler == 0)
-                    {   return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
+                    {   return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
                     }
                     $humi_zaehler +=1;
                 }
                 if($humi_zaehler > 3 or $temp_zaehler > 3)
                 {   Log3 $name, 4, "XiaomiEInk Abbruch, humi_zaehler -> $humi_zaehler --- temp_zaehler -> $temp_zaehler";
-                    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
+                    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
                 }
                 if($humi_zaehler >= 1 and $temp_zaehler >= 1)
                 {   Log3 $name, 4, "XiaomiEInk Ende, alles gefunden! Name->$name|Mac->$mac|Arg->$arg|Temperatur->$temperatur|Humidity->$humidity";
-                    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
+                    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
                 }
             }
             if ( $x_buffer =~ /Controller\s+(\S+)/ ) 
@@ -525,29 +586,41 @@ sub BluetoothCommands($)
     }
     close ( $in_fid );
     close ( $out_fid );
-    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery";
+    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
 }
 
 sub BluetoothCommands_Done($) {
 
     my $string = shift;
-    my ($name, $mac, $arg, $temperatur, $humidity, $model, $clock, $firmware, $manufactury, $battery) = split( "\\|", $string );
+    my ($name, $mac, $arg, $temperatur, $humidity, $model, $clock, $firmware, $manufactury, $battery, $error) = split( "\\|", $string );
     my $hash = $defs{$name};
 
-    readingsSingleUpdate($hash, "temperature", $temperatur, 1) if ($temperatur != 0);
-    Log3 $name, 3,"BluetoothCommands_Done ($name) - temperatur";
-    readingsSingleUpdate($hash, "humidity", $humidity, 1) if ($humidity != 0);
-    Log3 $name, 3,"BluetoothCommands_Done ($name) - humidity";
-    readingsSingleUpdate($hash, "state", 'T: ' . ReadingsVal( $name, 'temperature', 0 ) . ' H: ' . ReadingsVal( $name, 'humidity', 0 ), 1);
-    Log3 $name, 3,"BluetoothCommands_Done ($name) - state";
-    readingsSingleUpdate($hash, "model", $model, 1) if ($model ne '');
-    readingsSingleUpdate($hash, "clock", $clock, 1) if ($clock ne '');
-    readingsSingleUpdate($hash, "firmware", $firmware, 1) if ($firmware ne '');
-    readingsSingleUpdate($hash, "manufactury", $manufactury, 1) if ($manufactury ne '');
-    readingsSingleUpdate($hash, "batteryPercent", $battery, 1) if ($battery ne '');
-    readingsSingleUpdate($hash, "battery", "ok", 1) if ($battery ne '' and $battery > 15);
-    readingsSingleUpdate($hash, "battery", "low", 1) if ($battery ne '' and $battery <= 15);
-    readingsSingleUpdate($hash, "job", "done", 1);
+    if ($error eq 'ok')
+    {   readingsSingleUpdate($hash, "temperature", $temperatur, 1) if ($temperatur != 0);
+        Log3 $name, 3,"BluetoothCommands_Done ($name) - temperatur";
+        readingsSingleUpdate($hash, "humidity", $humidity, 1) if ($humidity != 0);
+        Log3 $name, 3,"BluetoothCommands_Done ($name) - humidity";
+        readingsSingleUpdate($hash, "state", 'T: ' . ReadingsVal( $name, 'temperature', 0 ) . ' H: ' . ReadingsVal( $name, 'humidity', 0 ), 1);
+        Log3 $name, 3,"BluetoothCommands_Done ($name) - state";
+        readingsSingleUpdate($hash, "model", $model, 1) if ($model ne '');
+        readingsSingleUpdate($hash, "clock", $clock, 1) if ($clock ne '');
+        readingsSingleUpdate($hash, "firmware", $firmware, 1) if ($firmware ne '');
+        readingsSingleUpdate($hash, "manufactury", $manufactury, 1) if ($manufactury ne '');
+        if ($battery ne '')
+           {   readingsSingleUpdate($hash, "batteryPercent", $battery, 1);
+           if ($battery > 15)
+           {   readingsSingleUpdate($hash, "battery", "ok", 1);
+           }
+           elsif ($battery <= 15)
+           {   readingsSingleUpdate($hash, "battery", "low", 1);
+           }
+           CallBattery_Timestamp($hash);
+        }
+        readingsSingleUpdate($hash, "job", "done", 1);
+    }
+    elsif($error ne 'error')
+    {   readingsSingleUpdate($hash, "job", "error", 1);
+    }
     delete( $hash->{helper}{RUNNING_PID} );
 
     Log3 $name, 5,"BluetoothCommands ($name) - BluetoothCommands: Helper is disabled. Stop processing"
@@ -561,6 +634,7 @@ sub BluetoothCommands_Aborted($) {
 
     delete( $hash->{helper}{RUNNING_PID} );
     readingsSingleUpdate( $hash, "state", "unreachable", 1 );
+    readingsSingleUpdate( $hash, "job", "aborted", 1 );
 
     #$readings{'lastGattError'} = 'The BlockingCall Process terminated unexpectedly. Timedout';
     
@@ -576,7 +650,7 @@ sub stateRequestTimer($) {
     RemoveInternalTimer($hash);
     stateRequest1($hash);
 
-    InternalTimer( gettimeofday() + $hash->{INTERVAL} + int( rand(300) ), "XiaomiEInk_stateRequestTimer", $hash );
+    InternalTimer( gettimeofday() + $hash->{INTERVAL} + int( rand(60) ), "XiaomiEInk_stateRequestTimer", $hash );
 
     Log3 $name, 4, "XiaomiEInk ($name) - stateRequestTimer: Call Request Timer";
 }
@@ -589,7 +663,12 @@ sub stateRequest1($)
 
        if ( !IsDisabled($name) ) {
             if (ReadingsVal( $name, 'model', '' ) =~ /LYWSD02/ )
-            {   myUtils_LYWSD02_main($mac,$name,'sensorData');
+            {   if (CallBattery_IsUpdateTimeAgeToOld($hash,$CallBatteryAge{ AttrVal( $name, 'BatteryFirmwareAge','24h' ) } ) )
+                {   myUtils_LYWSD02_main($mac,$name,'battery');
+                }
+                else
+                {   myUtils_LYWSD02_main($mac,$name,'sensorData');
+                }
             }
             elsif ( AttrVal( $name, 'model', 'none' ) eq 'none' ) 
             {   readingsSingleUpdate( $hash, "state", "get model first", 1 );
@@ -597,103 +676,53 @@ sub stateRequest1($)
        }
 }
 
+## Routinen damit Firmware und Batterie nur alle X male statt immer aufgerufen wird
+sub CallBattery_Timestamp($) 
+{   my $hash = shift;
+    my $name = $hash->{NAME};
+
+    $hash->{helper}{updateTimeCallBattery} = gettimeofday();    # in seconds since the epoch
+    $hash->{helper}{updateTimestampCallBattery} = FmtDateTime( gettimeofday() );
+    Log3 $name, 3, "CallBattery_Timestamp - hash -> " .$hash->{helper}{updateTimeCallBattery} ." und " .$hash->{helper}{updateTimestampCallBattery};
+}
+
+sub CallBattery_UpdateTimeAge($) 
+{   my $hash = shift;
+    my $name = $hash->{NAME};
+
+    $hash->{helper}{updateTimeCallBattery} = 0 if ( not defined( $hash->{helper}{updateTimeCallBattery} ) );
+    my $UpdateTimeAge = gettimeofday() - $hash->{helper}{updateTimeCallBattery};
+    Log3 $name, 3, "CallBattery_UpdateTimeAge - UpdateTimeAge -> $UpdateTimeAge";
+    return $UpdateTimeAge;
+}
+
+
+sub CallBattery_IsUpdateTimeAgeToOld($$) 
+{   my ( $hash, $maxAge ) = @_;
+    my $name = $hash->{NAME};
+
+    Log3 $name, 3, "CallBattery_IsUpdateTimeAgeToOld - hash -> $hash, maxAge -> $maxAge";
+    return ( CallBattery_UpdateTimeAge($hash) > $maxAge ? 1 : 0 );
+}
+
 1;
 
 =pod
 =item device
-=item summary       Modul to retrieves data from a Xiaomi BTLE Sensors
 =item summary_DE    Modul um Daten vom Xiaomi BTLE Sensoren aus zu lesen
-
-=begin html
-
-<a name="XiaomiEInk"></a>
-<h3>Xiaomi BTLE Sensor</h3>
-<ul>
-  <u><b>XiaomiEInk - Retrieves data from a Xiaomi BTLE Sensor</b></u>
-  <br>
-  With this module it is possible to read the data from a sensor and to set it as reading.</br>
-  Gatttool and hcitool is required to use this modul. (apt-get install bluez)
-  <br><br>
-  <a name="XiaomiEInkdefine"></a>
-  <b>Define</b>
-  <ul><br>
-    <code>define &lt;name&gt; XiaomiEInk &lt;BT-MAC&gt;</code>
-    <br><br>
-    Example:
-    <ul><br>
-      <code>define Weihnachtskaktus XiaomiEInk C4:7C:8D:62:42:6F</code><br>
-    </ul>
-    <br>
-    This statement creates a XiaomiEInk with the name Weihnachtskaktus and the Bluetooth Mac C4:7C:8D:62:42:6F.<br>
-    After the device has been created and the model attribut is set, the current data of the Xiaomi BTLE Sensor is automatically read from the device.
-  </ul>
-  <br><br>
-  <a name="XiaomiEInkreadings"></a>
-  <b>Readings</b>
-  <ul>
-    <li>state - Status of the flower sensor or error message if any errors.</li>
-    <li>batteryState - current battery state dependent on batteryLevel.</li>
-    <li>batteryPercent - current battery level in percent.</li>
-    <li>fertility - Values for the fertilizer content</li>
-    <li>firmware - current device firmware</li>
-    <li>lux - current light intensity</li>
-    <li>moisture - current moisture content</li>
-    <li>temperature - current temperature</li>
-  </ul>
-  <br><br>
-  <a name="XiaomiEInkset"></a>
-  <b>Set</b>
-  <ul>
-    <li>devicename - set a devicename</li>
-    <li>resetBatteryTimestamp - when the battery was changed</li>
-    <br>
-  </ul>
-  <br><br>
-  <a name="XiaomiEInkget"></a>
-  <b>Get</b>
-  <ul>
-    <li>sensorData - retrieves the current data of the Xiaomi sensor</li>
-    <li>devicename - fetch devicename</li>
-    <li>firmware - fetch firmware</li>
-    <br>
-  </ul>
-  <br><br>
-  <a name="XiaomiEInkattribut"></a>
-  <b>Attributes</b>
-  <ul>
-    <li>disable - disables the device</li>
-    <li>disabledForIntervals - disable device for interval time (13:00-18:30 or 13:00-18:30 22:00-23:00)</li>
-    <li>interval - interval in seconds for statusRequest</li>
-    <li>minFertility - min fertility value for low warn event</li>
-    <li>hciDevice - select bluetooth dongle device</li>
-    <li>model - set model type</li>
-    <li>maxFertility - max fertility value for High warn event</li>
-    <li>minMoisture - min moisture value for low warn event</li>
-    <li>maxMoisture - max moisture value for High warn event</li>
-    <li>minTemp - min temperature value for low warn event</li>
-    <li>maxTemp - max temperature value for high warn event</li>
-    <li>minlux - min lux value for low warn event</li>
-    <li>maxlux - max lux value for high warn event
-    <br>
-    Event Example for min/max Value's: 2017-03-16 11:08:05 XiaomiEInk Dracaena minMoisture low<br>
-    Event Example for min/max Value's: 2017-03-16 11:08:06 XiaomiEInk Dracaena maxTemp high</li>
-    <li>sshHost - FQD-Name or IP of ssh remote system / you must configure your ssh system for certificate authentication. For better handling you can config ssh Client with .ssh/config file</li>
-    <li>batteryFirmwareAge - how old can the reading befor fetch new data</li>
-    <li>blockingCallLoglevel - Blocking.pm Loglevel for BlockingCall Logoutput</li>
-  </ul>
-</ul>
-
-=end html
 
 =begin html_DE
 
 <a name="XiaomiEInk"></a>
 <h3>Xiaomi BTLE Sensor</h3>
 <ul>
-  <u><b>XiaomiEInk - liest Daten von einem Xiaomi BTLE Sensor</b></u>
+  <u><b>XiaomiEInk - liest Daten von einem Xiaomi eInk Sensor aus</b></u>
   <br />
   Dieser Modul liest Daten von einem Sensor und legt sie in den Readings ab.<br />
-  Auf dem (Linux) FHEM-Server werden gatttool und hcitool vorausgesetzt. (sudo apt install bluez)
+  Auf dem (Linux) FHEM-Server werden gatttool, hcitool und bluetoothctl vorausgesetzt. (sudo apt install bluez)<br />
+  Bitte unbedingt auf die Berechtigung achten! Der FHEM User muss in der bluetooth group vorhanden sein. <br />
+  Zum kontrollieren kann man sich mit "cat /etc/group" die Berechtigungen anzeigen lassen. <br />
+  Dort sollte die Berechtigung wie folgt aussehen "bluetooth:x:111:fhem,pi"
   <br /><br />
   <a name="XiaomiEInkdefine"></a>
   <b>Define</b>
@@ -702,41 +731,44 @@ sub stateRequest1($)
     <br /><br />
     Beispiel:
     <ul><br />
-      <code>define Weihnachtskaktus XiaomiEInk C4:7C:8D:62:42:6F</code><br />
+      <code>define wz_Xiaomi_eInk XiaomiEInk E7:2E:00:E2:74:D6</code><br />
     </ul>
     <br />
-    Der Befehl legt ein Device vom Typ XiaomiEInk mit dem Namen Weihnachtskaktus und der Bluetooth MAC C4:7C:8D:62:42:6F an.<br />
-    Nach dem Anlegen des Device und setzen des korrekten model Attributes werden umgehend und automatisch die aktuellen Daten vom betroffenen Xiaomi BTLE Sensor gelesen.
+    Der Befehl legt ein Device vom Typ XiaomiEInk mit dem Namen wz_Xiaomi_eInk und der Bluetooth MAC E7:2E:00:E2:74:D6 an.<br />
+    Nach dem Anlegen muss zuerst ein "get Device model" erfolgen. Das Modul kann erst mit dem ermittelten model die Werte für Temperatur + Luftfeuchtigkeit ermitteln.
   </ul>
   <br /><br />
   <a name="XiaomiEInkreadings"></a>
   <b>Readings</b>
   <ul>
-    <li>state - Status des BTLE Sensor oder eine Fehlermeldung falls Fehler beim letzten Kontakt auftraten.</li>
-    <li>batteryState - aktueller Batterie-Status in Abhängigkeit vom Wert batteryLevel.</li>
+    <li>state - Temperatur + Luftfeuchtigkeit oder eine Fehlermeldung.</li>
+    <li>battery - aktueller Batterie-Status in Abhängigkeit vom Wert batteryPercent.</li>
     <li>batteryPercent - aktueller Ladestand der Batterie in Prozent.</li>
-    <li>fertility - Wert des Fruchtbarkeitssensors (Bodenleitf&auml;higkeit)</li>
+    <li>clock - Uhrzeit auf dem Gereat</li>
     <li>firmware - aktuelle Firmware-Version des BTLE Sensor</li>
-    <li>lastGattError - Fehlermeldungen vom gatttool</li>
-    <li>lux - aktuelle Lichtintensit&auml;t</li>
-    <li>moisture - aktueller Feuchtigkeitswert</li>
+    <li>humidity - aktuelle Luftfeuchtigkeit</li>
     <li>temperature - aktuelle Temperatur</li>
+    <li>job - aktuelle Status des Job</li>
+    <li>manufactury - Hersteller</li>
+    <li>model - Modellbezeichnung vom Sensor</li>
   </ul>
   <br /><br />
   <a name="XiaomiEInkset"></a>
   <b>Set</b>
   <ul>
     <li>resetBatteryTimestamp - wenn die Batterie gewechselt wurde</li>
-    <li>devicename - setzt einen Devicenamen</li>
     <br />
   </ul>
   <br /><br />
   <a name="XiaomiEInkGet"></a>
   <b>Get</b>
   <ul>
-    <li>sensorData - aktive Abfrage der Sensors Werte</li>
-    <li>devicename - liest den Devicenamen aus</li>
-    <li>firmware - liest die Firmware aus</li>
+    <li>battery - liest den Batteriestand aus</li>
+    <li>clock - liest die Uhrzeit aus</li>
+    <li>firmware - liest die Firmware Version aus</li>
+    <li>manufactury - liest den Hersteller aus</li>
+    <li>model - liest das Model aus, diese Information wird fuer das Modul benoetigt</li>
+    <li>sensorData - liest die Werte Temperatur / Luftfeuchtigkeit aus</li>
     <br />
   </ul>
   <br /><br />
@@ -746,22 +778,6 @@ sub stateRequest1($)
     <li>disable - deaktiviert das Device</li>
     <li>interval - Interval in Sekunden zwischen zwei Abfragen</li>
     <li>disabledForIntervals - deaktiviert das Gerät für den angegebenen Zeitinterval (13:00-18:30 or 13:00-18:30 22:00-23:00)</li>
-    <li>minFertility - min Fruchtbarkeits-Grenzwert f&uuml;r ein Ereignis minFertility low </li>
-    <li>hciDevice - Auswahl bei mehreren Bluetooth Dongeln</li>
-    <li>model - setzt das Model</li>
-    <li>maxFertility - max Fruchtbarkeits-Grenzwert f&uuml;r ein Ereignis maxFertility high </li>
-    <li>minMoisture - min Feuchtigkeits-Grenzwert f&uuml;r ein Ereignis minMoisture low </li> 
-    <li>maxMoisture - max Feuchtigkeits-Grenzwert f&uuml;r ein Ereignis maxMoisture high </li>
-    <li>minTemp - min Temperatur-Grenzwert f&uuml;r ein Ereignis minTemp low </li>
-    <li>maxTemp - max Temperatur-Grenzwert f&uuml;r ein Ereignis maxTemp high </li>
-    <li>minlux - min Helligkeits-Grenzwert f&uuml;r ein Ereignis minlux low </li>
-    <li>maxlux - max Helligkeits-Grenzwert f&uuml;r ein Ereignis maxlux high
-    <br /><br />Beispiele f&uuml;r min/max-Ereignisse:<br />
-    2017-03-16 11:08:05 XiaomiEInk Dracaena minMoisture low<br />
-    2017-03-16 11:08:06 XiaomiEInk Dracaena maxTemp high<br /><br /></li>
-    <li>sshHost - FQDN oder IP-Adresse eines entfernten SSH-Systems. Das SSH-System ist auf eine Zertifikat basierte Authentifizierung zu konfigurieren. Am elegantesten geschieht das mit einer  .ssh/config Datei auf dem SSH-Client.</li>
-    <li>batteryFirmwareAge - wie alt soll der Timestamp des Readings sein bevor eine Aktuallisierung statt findet</li>
-    <li>blockingCallLoglevel - Blocking.pm Loglevel für BlockingCall Logausgaben</li>
   </ul>
 </ul>
 
@@ -786,7 +802,7 @@ sub stateRequest1($)
   ],
   "release_status": "unstable",
   "license": "GPL_2",
-  "version": "v0.0.4",
+  "version": "v0.0.5",
   "author": [
     "Mathias Passow <mathias.passow@me.com>"
   ],
