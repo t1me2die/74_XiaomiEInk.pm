@@ -13,7 +13,7 @@
 # 2019-10-24 add 24h function for "get device battery"
 # 2019-10-24 update for bluez 5.51 - super alpha testing
 # 2019-10-25 add function "get device bluezVersion" is necessary for "get device sensorData"
-#            - support for bluezVersion: 5.43, 5.50 & 5.51, maybe 5.44-5.49 probably work
+#            - support for bluezVersion: 5.43 - 5.51
 #
 
 package main;
@@ -512,7 +512,7 @@ sub BluetoothCommands($)
                 if (ReadingsVal($name, 'model', '') eq '' or ReadingsNum($name,'bluezVersion',0) == 0)
 				{	return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|error|$bluezVersion";
 				}
-				if ($flg == 1 and ReadingsNum($name,'bluezVersion',0) >= 5.50)
+				if ($flg == 1 and ReadingsNum($name,'bluezVersion',0) >= 5.47)
 				{	if (substr($x_buffer, 65, 1) eq '4')
 					{	$hex = substr($x_buffer,73,2);
 						$temperatur = hex($hex)/10;
@@ -550,7 +550,7 @@ sub BluetoothCommands($)
                     $flg_humi = 0;
                 }
                 
-				if (ReadingsNum($name,'bluezVersion',0) < 5.50)
+				if (ReadingsNum($name,'bluezVersion',0) < 5.47)
 				{	if ($i == 14)
 					{   my $pos = index($x_buffer,'0x');
 						if ($pos != -1)
