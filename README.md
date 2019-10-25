@@ -4,7 +4,7 @@ check it under:
 cat /etc/group
 
 output like: 
-bluetooth:x:111:fhem,pi
+bluetooth: x :111:fhem,pi
 
 add user to group bluetooth:
 usermod -aG GROUPNAME USERNAME
