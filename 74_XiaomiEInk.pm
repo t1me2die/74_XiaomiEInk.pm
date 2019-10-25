@@ -12,7 +12,8 @@
 # 2019-10-23 add function "get device battery"
 # 2019-10-24 add 24h function for "get device battery"
 # 2019-10-24 update for bluez 5.51 - super alpha testing
-# TO-DO: have to code -> getBlueZVersion 
+# 2019-10-25 add function "get device bluezVersion" is necessary for "get device sensorData"
+#            - support for bluezVersion: 5.43, 5.50 & 5.51, maybe 5.44-5.49 probably work
 #
 
 package main;
@@ -51,6 +52,7 @@ BEGIN {
           CommandAttr
           AttrVal
           ReadingsVal
+          ReadingsNum
           IsDisabled
           deviceEvents
           init_done
@@ -140,7 +142,7 @@ sub Get($$@) {
 
     Log3 $name, 5, "XiaomiEInk name -> $name, cmd -> $cmd, mac -> $mac";
 
-    if ($cmd eq 'sensorData' or $cmd eq 'model' or $cmd eq 'clock' or $cmd eq 'firmware' or $cmd eq 'manufactury') {
+    if ($cmd eq 'sensorData' or $cmd eq 'model' or $cmd eq 'clock' or $cmd eq 'firmware' or $cmd eq 'manufactury' or $cmd eq 'bluezVersion') {
         return "usage: clock" if ( @args != 0 );
         Log3 $name, 4,"Get Mac -> $mac, Name -> $name, Cmd -> $cmd";
         myUtils_LYWSD02_main($mac,$name,$cmd);
@@ -160,7 +162,7 @@ sub Get($$@) {
     else 
     {   my $list = "";
         # List for the get commands
-        $list .= "sensorData:noArg model:noArg clock:noArg firmware:noArg manufactury:noArg battery:noArg";
+        $list .= "sensorData:noArg model:noArg clock:noArg firmware:noArg manufactury:noArg battery:noArg bluezVersion:noArg";
         return "Unknown argument $cmd, choose one of $list";
     }
 
@@ -309,6 +311,7 @@ sub myUtils_LYWSD02_main($$$)
     Log3 $name, 4,"myUtils_LYWSD02_main, Mac -> $mac, Name -> $name, Cmd -> $cmd, HASH -> $hash";
     readingsSingleUpdate( $hash, "job", "read sensorData", 1 ) if ($cmd eq 'sensorData');
     readingsSingleUpdate( $hash, "job", "read model", 1 ) if ($cmd eq 'model');
+    readingsSingleUpdate( $hash, "job", "read bluezVersion", 1 ) if ($cmd eq 'bluezVersion');
     readingsSingleUpdate( $hash, "job", "read clock", 1 ) if ($cmd eq 'clock');
     readingsSingleUpdate( $hash, "job", "read firmware", 1 ) if ($cmd eq 'firmware');
     readingsSingleUpdate( $hash, "job", "read manufactury", 1 ) if ($cmd eq 'manufactury');
@@ -316,7 +319,7 @@ sub myUtils_LYWSD02_main($$$)
   
     # Set Parameter to execute statement
     $arg = 'scan on,scan off,quit' if($cmd eq 'sensorData');
-    $arg = 'a,quit' if($cmd eq 'clock' or $cmd eq 'firmware' or $cmd eq 'manufactury' or $cmd eq 'model' or $cmd eq 'battery');
+    $arg = 'a,quit' if($cmd eq 'clock' or $cmd eq 'firmware' or $cmd eq 'manufactury' or $cmd eq 'model' or $cmd eq 'battery' or $cmd eq 'bluezVersion');
   
     # NonBlocking Call to run Subroutine
     $hash->{helper}{RUNNING_PID} = BlockingCall(
@@ -360,6 +363,9 @@ sub BluetoothCommands($)
     elsif ($cmd eq 'model') {
         open2 ( $in_fid, $out_fid, "gatttool -b $mac --char-read -a 0x03".' 2>&1' );
     }
+    elsif ($cmd eq 'bluezVersion') {
+        open2 ( $in_fid, $out_fid, "bluetoothctl -v".' 2>&1' );
+    }
     elsif ($cmd eq 'clock') {
         open2 ( $in_fid, $out_fid, "gatttool -b $mac --char-read -a 0x3e".' 2>&1' );
     }
@@ -392,6 +398,7 @@ sub BluetoothCommands($)
 	my $save_lastBuffer = 0;
 	my $flg_humi = 0;
 	my $firstCatch = 0;
+	my $bluezVersion = '';
     my @ARGV = split(',',$arg);
     my $hash = $defs{$name};
 
@@ -433,7 +440,7 @@ sub BluetoothCommands($)
                        if(length($mon) < 2){ $mon="0".$mon; }
                        $clock = $mday .'.' .$mon .'.' .$year .'-' .$hour .':' .$min .':' .$sec;
                        Log3 $name, 4, "x_Buffer -> $x_buffer, cmd -> $cmd, launch_flag -> $launch_flag, hex -> $hex, time -> $time, clock -> $clock";
-                       return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
+                       return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok|$bluezVersion";
                     }
                        Log3 $name, 4, "Buffer-Last? x_Buffer -> $x_buffer, cmd -> $cmd, launch_flag -> $launch_flag";
                        last;
@@ -444,7 +451,7 @@ sub BluetoothCommands($)
                       $hex = substr($x_buffer,$pos+12);
                       $hex =~ s/\s+//g;
                       $firmware = pack('H*',$hex);
-                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
+                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok|$bluezVersion";
                    }
                 }
                 if ($x_buffer =~ /@/ and $cmd eq 'manufactury') {
@@ -453,7 +460,7 @@ sub BluetoothCommands($)
                       $hex = substr($x_buffer,$pos+12);
                       $hex =~ s/\s+//g;
                       $manufactury = pack('H*',$hex);
-                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
+                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok|$bluezVersion";
                    }
                 }
                 if ($x_buffer =~ /@/ and $cmd eq 'model') {
@@ -462,8 +469,24 @@ sub BluetoothCommands($)
                       $hex = substr($x_buffer,$pos+12);
                       $hex =~ s/\s+//g;
                       $model = pack('H*',$hex);
-                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
+                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok|$bluezVersion";
                    }
+                }
+                if ($x_buffer =~ /@/ and $cmd eq 'bluezVersion') {
+                   my $pos = index($x_buffer,'bluetoothctl:');
+                   if ($pos != -1)
+                   {   $bluezVersion = substr($x_buffer,$pos+14,4);
+                   }
+                   # bluetoothctl Version not found, check the String like for version number like "x.xx"
+                   elsif ($pos == -1)
+                   {   if ($x_buffer =~ /(\d[.]\d\d)/)
+						{	$bluezVersion = substr($x_buffer,0,4);
+						}
+						else
+						{	$bluezVersion = 'notFoundPleaseTellMeYourBluezVersion';
+						}
+                   }
+                   return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok|$bluezVersion";
                 }
                 if ($x_buffer =~ /@/ and $cmd eq 'battery') {
                    my $pos = index($x_buffer,'descriptor:');
@@ -471,10 +494,10 @@ sub BluetoothCommands($)
                       $hex = substr($x_buffer,$pos+12,2);
                       $hex =~ s/\s+//g;
                       $battery = hex($hex);
-                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
+                      return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok|$bluezVersion";
                    }
                    elsif($pos == -1)
-                   {   return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|error";
+                   {   return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|error|$bluezVersion";
                    }
                 }
             } until ( $x_buffer =~ /^%*[^\[].*#\s+/ );
@@ -486,7 +509,10 @@ sub BluetoothCommands($)
             $x_buffer =~ /^%*(.*)@\[bluetooth/;
             unless ( $x_buffer =~ /^\s*$/ ) 
             {   #print "\n<- Angekommen hier...     $1\n";
-                if ($flg == 1)
+                if (ReadingsVal($name, 'model', '') eq '' or ReadingsNum($name,'bluezVersion',0) == 0)
+				{	return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|error|$bluezVersion";
+				}
+				if ($flg == 1 and ReadingsNum($name,'bluezVersion',0) >= 5.50)
 				{	if (substr($x_buffer, 65, 1) eq '4')
 					{	$hex = substr($x_buffer,73,2);
 						$temperatur = hex($hex)/10;
@@ -524,39 +550,41 @@ sub BluetoothCommands($)
                     $flg_humi = 0;
                 }
                 
-                if ($i == 14)
-                {   my $pos = index($x_buffer,'0x');
-                    if ($pos != -1)
-                    {   $art = substr($x_buffer,$pos+2,2);
-                    }
-                }
-                # Temperatur
-                if ($art =~ /4/ and $i == 17)
-                {   my $pos = index($x_buffer,'0x');
-                    $hex = substr($x_buffer,$pos+2,2);
-                    $temperatur = hex($hex)/10;
-                    $temp_zaehler +=1;
-                }
-                elsif ($art =~ /6/ and $i == 17)
-                {   my $pos = index($x_buffer,'0x');
-                    $hex = substr($x_buffer,$pos+2,2);
-                }
-                elsif ($art =~ /6/ and $i == 18)
-                {   my $pos = index($x_buffer,'0x');
-                    $hex = substr($x_buffer,$pos+2,2) .$hex;
-                    $humidity = hex($hex)/10;
-                    if ($humi_zaehler == 0)
-                    {   return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
-                    }
-                    $humi_zaehler +=1;
-                }
+				if (ReadingsNum($name,'bluezVersion',0) < 5.50)
+				{	if ($i == 14)
+					{   my $pos = index($x_buffer,'0x');
+						if ($pos != -1)
+						{   $art = substr($x_buffer,$pos+2,2);
+						}
+					}
+					# Temperatur
+					if ($art =~ /4/ and $i == 17)
+					{   my $pos = index($x_buffer,'0x');
+						$hex = substr($x_buffer,$pos+2,2);
+						$temperatur = hex($hex)/10;
+						$temp_zaehler +=1;
+					}
+					elsif ($art =~ /6/ and $i == 17)
+					{   my $pos = index($x_buffer,'0x');
+						$hex = substr($x_buffer,$pos+2,2);
+					}
+					elsif ($art =~ /6/ and $i == 18)
+					{   my $pos = index($x_buffer,'0x');
+						$hex = substr($x_buffer,$pos+2,2) .$hex;
+						$humidity = hex($hex)/10;
+						if ($humi_zaehler == 0)
+						{   return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok|$bluezVersion";
+						}
+						$humi_zaehler +=1;
+					}
+				}
                 if($humi_zaehler > 3 or $temp_zaehler > 3)
                 {   Log3 $name, 4, "XiaomiEInk Abbruch, humi_zaehler -> $humi_zaehler --- temp_zaehler -> $temp_zaehler";
-                    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
+                    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok|$bluezVersion";
                 }
                 if($humi_zaehler >= 1 and $temp_zaehler >= 1)
                 {   Log3 $name, 4, "XiaomiEInk Ende, alles gefunden! Name->$name|Mac->$mac|Arg->$arg|Temperatur->$temperatur|Humidity->$humidity";
-                    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
+                    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok|$bluezVersion";
                 }
             }
             if ( $x_buffer =~ /Controller\s+(\S+)/ ) 
@@ -586,13 +614,13 @@ sub BluetoothCommands($)
     }
     close ( $in_fid );
     close ( $out_fid );
-    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok";
+    return "$name|$mac|$arg|$temperatur|$humidity|$model|$clock|$firmware|$manufactury|$battery|ok|$bluezVersion";
 }
 
 sub BluetoothCommands_Done($) {
 
     my $string = shift;
-    my ($name, $mac, $arg, $temperatur, $humidity, $model, $clock, $firmware, $manufactury, $battery, $error) = split( "\\|", $string );
+    my ($name, $mac, $arg, $temperatur, $humidity, $model, $clock, $firmware, $manufactury, $battery, $error, $bluezVersion) = split( "\\|", $string );
     my $hash = $defs{$name};
 
     if ($error eq 'ok')
@@ -603,6 +631,7 @@ sub BluetoothCommands_Done($) {
         readingsSingleUpdate($hash, "state", 'T: ' . ReadingsVal( $name, 'temperature', 0 ) . ' H: ' . ReadingsVal( $name, 'humidity', 0 ), 1);
         Log3 $name, 3,"BluetoothCommands_Done ($name) - state";
         readingsSingleUpdate($hash, "model", $model, 1) if ($model ne '');
+        readingsSingleUpdate($hash, "bluezVersion", $bluezVersion, 1) if ($bluezVersion ne '');
         readingsSingleUpdate($hash, "clock", $clock, 1) if ($clock ne '');
         readingsSingleUpdate($hash, "firmware", $firmware, 1) if ($firmware ne '');
         readingsSingleUpdate($hash, "manufactury", $manufactury, 1) if ($manufactury ne '');
@@ -618,8 +647,14 @@ sub BluetoothCommands_Done($) {
         }
         readingsSingleUpdate($hash, "job", "done", 1);
     }
-    elsif($error ne 'error')
+    elsif($error eq 'error')
     {   readingsSingleUpdate($hash, "job", "error", 1);
+	    if ( ReadingsVal( $name, 'model', 'none' ) eq 'none' )
+        {   readingsSingleUpdate( $hash, "state", "get model first", 1 );
+        }
+        elsif ( ReadingsNum( $name, 'bluezVersion', 0 ) == 0 )
+        {   readingsSingleUpdate( $hash, "state", "get bluezVersion first", 1 );
+        }
     }
     delete( $hash->{helper}{RUNNING_PID} );
 
@@ -662,7 +697,7 @@ sub stateRequest1($)
     my %readings;
 
        if ( !IsDisabled($name) ) {
-            if (ReadingsVal( $name, 'model', '' ) =~ /LYWSD02/ )
+            if (ReadingsVal( $name, 'model', '' ) =~ /LYWSD02/ and ReadingsVal($name, 'bluezVersion', '') ne '')
             {   if (CallBattery_IsUpdateTimeAgeToOld($hash,$CallBatteryAge{ AttrVal( $name, 'BatteryFirmwareAge','24h' ) } ) )
                 {   myUtils_LYWSD02_main($mac,$name,'battery');
                 }
@@ -670,8 +705,11 @@ sub stateRequest1($)
                 {   myUtils_LYWSD02_main($mac,$name,'sensorData');
                 }
             }
-            elsif ( AttrVal( $name, 'model', 'none' ) eq 'none' ) 
+            elsif ( ReadingsVal( $name, 'model', 'none' ) eq 'none' )
             {   readingsSingleUpdate( $hash, "state", "get model first", 1 );
+            }
+            elsif ( ReadingsNum( $name, 'bluezVersion', 0 ) == 0 )
+            {   readingsSingleUpdate( $hash, "state", "get bluezVersion first", 1 );
             }
        }
 }
